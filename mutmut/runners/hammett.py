@@ -1,10 +1,10 @@
 from .base import TestRunner
-from ..stats import StatManager
+from ..stats import MUTATION_STATS
 from ..config import Config
 
 class HammettRunner(TestRunner):
-    def __init__(self, stats: StatManager, config: Config):
-        super().__init__(stats, config)
+    def __init__(self, config: Config):
+        super().__init__(config)
         self.hammett_kwargs = None
 
     def run_stats(self, *, tests):
@@ -12,9 +12,9 @@ class HammettRunner(TestRunner):
         print('Running hammett stats...')
 
         def post_test_callback(_name, **_):
-            for function in self.stats:
-                self.stats.tests_by_mangled_function_name[function].add(_name)
-            self.stats.clear()
+            for function in MUTATION_STATS:
+                MUTATION_STATS.tests_by_mangled_function_name[function].add(_name)
+            MUTATION_STATS.clear()
 
         return hammett.main(quiet=True, fail_fast=True, disable_assert_analyze=True, post_test_callback=post_test_callback, use_cache=False, insert_cwd=False)
 

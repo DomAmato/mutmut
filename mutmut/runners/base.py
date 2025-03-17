@@ -6,9 +6,8 @@ from ..stats import StatManager
 from ..config import Config
 
 class TestRunner(ABC):
-    def __init__(self, stats: StatManager, config: Config):
+    def __init__(self, config: Config):
         self.config = config
-        self.stats = stats
 
     @abstractmethod
     def run_stats(self, *, tests):

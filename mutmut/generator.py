@@ -17,7 +17,7 @@ from parso import (
     parse,
     ParserSyntaxError
     )
-from mutmut.utils import NEVER_MUTATE_FUNCTION_NAMES, NEVER_MUTATE_FUNCTION_CALLS, CLASS_NAME_SEPARATOR, strip_prefix, walk_source_files
+from mutmut.utils import NEVER_MUTATE_FUNCTION_NAMES, NEVER_MUTATE_FUNCTION_CALLS, CLASS_NAME_SEPARATOR, strip_prefix, walk_source_files, walk_all_files
 from mutmut.config import Config
 from mutmut.mutators import (
     OperationMutator,
@@ -65,15 +65,15 @@ from typing import ClassVar
 MutantDict = Annotated[dict[str, Callable], "Mutant"]
 
 
-def _mutmut_trampoline(self, orig, mutants, *args, **kwargs):
+def _mutmut_trampoline(orig, mutants, *args, **kwargs):
     import os
     mutant_under_test = os.environ['MUTANT_UNDER_TEST']
     if mutant_under_test == 'fail':
-        from self.__main__ import MutmutProgrammaticFailException
+        from mutmut.exceptions import MutmutProgrammaticFailException
         raise MutmutProgrammaticFailException('Failed programmatically')      
     elif mutant_under_test == 'stats':
-        from self.__main__ import record_trampoline_hit
-        record_trampoline_hit(orig.__module__ + '.' + orig.__name__)
+        from mutmut.stats import MUTATION_STATS
+        MUTATION_STATS.record_trampoline_hit(orig.__module__ + '.' + orig.__name__)
         result = orig(*args, **kwargs)
         return result  # for the yield case
     prefix = orig.__module__ + '.' + orig.__name__ + '__mutmut_'
@@ -166,8 +166,15 @@ class MutantGenerator:
         self.sentinel = object()
         self.config = config
 
-    def create_mutants(self, ):
-        for path in walk_source_files():
+    def copy_src_dir(self):
+        for root, filename in walk_all_files(self.config.paths_to_mutate):
+            path = Path(root) / filename
+            output_path = Path('mutants') / path
+            os.makedirs(output_path.parent, exist_ok=True)
+            shutil.copy(path, output_path)
+
+    def create_mutants(self):
+        for path in walk_source_files(self.config.paths_to_mutate):
             print(path)
             output_path = Path('mutants') / path
             os.makedirs(output_path.parent, exist_ok=True)
@@ -287,15 +294,15 @@ class MutantGenerator:
             trampoline_name = '_mutmut_trampoline'
 
         return f"""
-    {mutants_dict}
+{mutants_dict}
 
-    def {orig_name}({'self, ' if class_name is not None else ''}*args, **kwargs):
-        result = {yield_statement}{trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, *args, **kwargs)
-        return result 
+def {orig_name}({'self, ' if class_name is not None else ''}*args, **kwargs):
+    result = {yield_statement}{trampoline_name}({access_prefix}{mangled_name}__mutmut_orig{access_suffix}, {access_prefix}{mangled_name}__mutmut_mutants{access_suffix}, *args, **kwargs)
+    return result 
 
-    {orig_name}.__signature__ = _mutmut_signature({mangled_name}__mutmut_orig)
-    {mangled_name}__mutmut_orig.__name__ = '{mangled_name}'
-    """
+{orig_name}.__signature__ = _mutmut_signature({mangled_name}__mutmut_orig)
+{mangled_name}__mutmut_orig.__name__ = '{mangled_name}'
+"""
 
 
     @contextmanager

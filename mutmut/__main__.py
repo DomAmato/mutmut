@@ -1,6 +1,5 @@
 import fnmatch
 import gc
-import inspect
 import itertools
 import os
 import resource
@@ -32,30 +31,13 @@ from parso import (
 from setproctitle import setproctitle
 from mutmut.config import read_config
 from mutmut.generator import SourceFileMutationData, MutantGenerator
-from mutmut.stats import STATUS_BY_EXIT_CODE, StatManager, EMOJI_BY_STATUS
+from mutmut.stats import STATUS_BY_EXIT_CODE, EMOJI_BY_STATUS, MUTATION_STATS
 from mutmut.utils import CLASS_NAME_SEPARATOR, walk_source_files
 from mutmut.exceptions import MutmutProgrammaticFailException, CollectTestsFailedException
 from mutmut.runners.pytest import PytestRunner
 
 mutmut_config = read_config()
-mutation_stats = StatManager()
 mutant_generatior = MutantGenerator(mutmut_config)
-
-def record_trampoline_hit(name):
-    assert not name.startswith('src.'), f'Failed trampoline hit. Module name starts with `src.`, which is invalid'
-    if mutmut_config.max_stack_depth != -1:
-        f = inspect.currentframe()
-        c = mutmut_config.max_stack_depth
-        while c and f:
-            if 'pytest' in f.f_code.co_filename or 'hammett' in f.f_code.co_filename:
-                break
-            f = f.f_back
-            c -= 1
-
-        if not c:
-            return
-
-    mutation_stats.add(name)
 
 
 spinner = itertools.cycle('⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏')
@@ -105,11 +87,11 @@ def tests_for_mutant_names(mutant_names):
     tests = set()
     for mutant_name in mutant_names:
         if '*' in mutant_name:
-            for name, tests_of_this_name in mutation_stats.tests_by_mangled_function_name.items():
+            for name, tests_of_this_name in MUTATION_STATS.tests_by_mangled_function_name.items():
                 if fnmatch.fnmatch(name, mutant_name):
                     tests |= set(tests_of_this_name)
         else:
-            tests |= set(mutation_stats.tests_by_mangled_function_name[mangled_name_from_mutant_name(mutant_name)])
+            tests |= set(MUTATION_STATS.tests_by_mangled_function_name[mangled_name_from_mutant_name(mutant_name)])
     return tests
 
 
@@ -157,7 +139,7 @@ def read_mutant_ast_node(ast, mutant_name):
 
 
 def find_mutant(mutant_name):
-    for path in walk_source_files():
+    for path in walk_source_files(mutmut_config):
         if mutmut_config.should_ignore_for_mutation(path):
             continue
 
@@ -231,17 +213,17 @@ def run_stats_collection(runner, tests=None):
 
     print('    done')
     if not tests:  # again, meaning all
-        mutation_stats.stats_time = process_time() - start_cpu_time
+        MUTATION_STATS.stats_time = process_time() - start_cpu_time
 
     if not collected_test_names():
         print('failed to collect stats, no active tests found')
         exit(1)
 
-    mutation_stats.save_stats()
+    MUTATION_STATS.save_stats()
 
 
 def collect_or_load_stats(runner):
-    did_load = mutation_stats.load_stats()
+    did_load = MUTATION_STATS.load_stats()
 
     if not did_load:
         # Run full stats
@@ -259,7 +241,7 @@ def collect_or_load_stats(runner):
 
         all_tests_result.clear_out_obsolete_test_names()
 
-        new_tests = all_tests_result.new_tests()
+        new_tests = all_tests_result.new_tests(collected_test_names())
 
         if new_tests:
             print(f'Found {len(new_tests)} new tests, rerunning stats collection')
@@ -271,7 +253,7 @@ def collect_or_load_stats(runner):
 def collect_source_file_mutation_data(*, mutant_names):
     source_file_mutation_data_by_path: dict[str, SourceFileMutationData] = {}
 
-    for path in walk_source_files():
+    for path in walk_source_files(mutmut_config.paths_to_mutate):
         if mutmut_config.should_ignore_for_mutation(path):
             continue
         assert path not in source_file_mutation_data_by_path
@@ -296,7 +278,7 @@ def collect_source_file_mutation_data(*, mutant_names):
     return mutants, source_file_mutation_data_by_path
 
 def collected_test_names():
-    return set(mutation_stats.duration_by_test.keys())
+    return set(MUTATION_STATS.duration_by_test.keys())
 
 
 def mangled_name_from_mutant_name(mutant_name):
@@ -365,17 +347,16 @@ def cli():
     pass
 
 def estimated_worst_case_time(mutant_name):
-    tests = mutation_stats.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), set())
-    return sum(mutation_stats.duration_by_test[t] for t in tests)
+    tests = MUTATION_STATS.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), set())
+    return sum(MUTATION_STATS.duration_by_test[t] for t in tests)
 
 
 @cli.command()
 @click.argument('mutant_names', required=False, nargs=-1)
 def print_time_estimates(mutant_names):
     assert isinstance(mutant_names, (tuple, list)), mutant_names
-    read_config()
 
-    runner = PytestRunner()
+    runner = PytestRunner(config=mutmut_config)
     runner.prepare_main_test_run()
 
     collect_or_load_stats(runner)
@@ -397,7 +378,7 @@ def print_time_estimates(mutant_names):
 @cli.command()
 @click.argument('mutant_name', required=True, nargs=1)
 def tests_for_mutant(mutant_name):
-    if not mutation_stats.load_stats():
+    if not MUTATION_STATS.load_stats():
         print('Failed to load stats. Please run mutmut first to collect stats.')
         exit(1)
 
@@ -415,11 +396,11 @@ def run(mutant_names, *, max_children):
     # TODO: run no-ops once in a while to detect if we get false negatives
     # TODO: we should be able to get information on which tests killed mutants, which means we can get a list of tests and how many mutants each test kills. Those that kill zero mutants are redundant!
     os.environ['MUTANT_UNDER_TEST'] = 'mutant_generation'
-    read_config()
 
     start = datetime.now()
     makedirs(Path('mutants'), exist_ok=True)
     with CatchOutput(spinner_title='Generating mutants'):
+        mutant_generatior.copy_src_dir()
         mutant_generatior.create_mutants()
         mutant_generatior.copy_also_copy_files()
 
@@ -437,7 +418,7 @@ def run(mutant_names, *, max_children):
 
     # TODO: config/option for runner
     # runner = HammettRunner()
-    runner = PytestRunner()
+    runner = PytestRunner(config=mutmut_config)
     runner.prepare_main_test_run()
 
     # TODO: run these steps only if we have mutants to test
@@ -488,15 +469,15 @@ def run(mutant_names, *, max_children):
         # Calculate times of tests
         for m, mutant_name, result in mutants:
             mutant_name = mutant_name.replace('__init__.', '')
-            tests = mutation_stats.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), [])
-            estimated_time_of_tests = sum(mutation_stats.duration_by_test[test_name] for test_name in tests)
+            tests = MUTATION_STATS.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), [])
+            estimated_time_of_tests = sum(MUTATION_STATS.duration_by_test[test_name] for test_name in tests)
             m.estimated_time_of_tests_by_mutant[mutant_name] = estimated_time_of_tests
 
         Thread(target=timeout_checker(mutants), daemon=True).start()
 
         # Now do mutation
         for m, mutant_name, result in mutants:
-            mutation_stats.print_stats(source_file_mutation_data_by_path, print_status=print_status)
+            MUTATION_STATS.print_stats(source_file_mutation_data_by_path, print_status=print_status)
 
             mutant_name = mutant_name.replace('__init__.', '')
 
@@ -504,7 +485,7 @@ def run(mutant_names, *, max_children):
             if not mutant_names and result is not None:
                 continue
 
-            tests = mutation_stats.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), [])
+            tests = MUTATION_STATS.tests_by_mangled_function_name.get(mangled_name_from_mutant_name(mutant_name), [])
 
             # print(tests)
             if not tests:
@@ -519,7 +500,7 @@ def run(mutant_names, *, max_children):
                 setproctitle(f'mutmut: {mutant_name}')
 
                 # Run fast tests first
-                tests = sorted(tests, key=lambda test_name: mutation_stats.duration_by_test[test_name])
+                tests = sorted(tests, key=lambda test_name: MUTATION_STATS.duration_by_test[test_name])
                 if not tests:
                     os._exit(33)
 
@@ -558,7 +539,7 @@ def run(mutant_names, *, max_children):
 
     t = datetime.now() - start
 
-    mutation_stats.print_stats(source_file_mutation_data_by_path, print_status=print_status, force_output=True)
+    MUTATION_STATS.print_stats(source_file_mutation_data_by_path, print_status=print_status, force_output=True)
     print()
     print(f'{count_tried / t.total_seconds():.2f} mutations/second')
 
@@ -580,8 +561,7 @@ def run(mutant_names, *, max_children):
 @cli.command()
 @click.option('--all', default=False)
 def results(all):
-    read_config()
-    for path in walk_source_files():
+    for path in walk_source_files(mutmut_config.paths_to_mutate):
         if not str(path).endswith('.py'):
             continue
         m = SourceFileMutationData(path=path)

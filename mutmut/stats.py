@@ -1,8 +1,10 @@
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
 import json
 from mutmut.generator import SourceFileMutationData
-
+import inspect
+from mutmut.config import read_config
 class Status(Enum):
     NOT_CHECKED = 'not checked'
     KILLED = 'killed'
@@ -58,27 +60,32 @@ class Stat:
     timeout: int
     check_was_interrupted_by_user: int
     
-@dataclass
-class StatCollection:
-    tests_by_mangled_function_name: dict[str]
-    duration_by_test: dict[str]
-    stats_time: float
-
 class StatManager:
+    _instance = None  # Class-level attribute to hold the singleton instance
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(StatManager, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
 
     def __init__(self):
-        self.stats = StatCollection({}, {}, 0.0)
-        self.stats_set = set()
-        self.load_stats()
+        if not hasattr(self, 'initialized'):  # Ensure __init__ runs only once
+            self.tests_by_mangled_function_name = defaultdict(set)
+            self.duration_by_test = {}
+            self.stats_time = 0.0
+            self.functions = set()
+            self.load_stats()
+            self.config = read_config()
+            self.initialized = True  # Mark as initialized to prevent reinitialization
 
     def collect_stat(self, m: SourceFileMutationData):
         r = {
-            k.replace(' ', '_'): 0
-            for k in STATUS_BY_EXIT_CODE.values()
+            status.value.replace(' ', '_'): 0
+            for status in STATUS_BY_EXIT_CODE.values()
         }
         for k, v in m.exit_code_by_key.items():
             # noinspection PyTypeChecker
-            r[STATUS_BY_EXIT_CODE[v].replace(' ', '_')] += 1
+            r[STATUS_BY_EXIT_CODE[v].value.replace(' ', '_')] += 1
         return Stat(
             **r,
             total=sum(r.values()),
@@ -105,16 +112,15 @@ class StatManager:
         print_status(f'{(s.total - s.not_checked)}/{s.total}  🎉 {s.killed} 🫥 {s.no_tests}  ⏰ {s.timeout}  🤔 {s.suspicious}  🙁 {s.survived}  🔇 {s.skipped}', force_output=force_output)
 
 
-
     def load_stats(self, stat_file: str = 'mutants/mutmut-stats.json'):
         did_load = False
         try:
             with open(stat_file) as f:
                 data = json.load(f)
                 for k, v in data.pop('tests_by_mangled_function_name').items():
-                    self.stats.tests_by_mangled_function_name[k] |= set(v)
-                self.stats.duration_by_test = data.pop('duration_by_test')
-                self.stats.stats_time = data.pop('stats_time')
+                    self.tests_by_mangled_function_name[k] |= set(v)
+                self.duration_by_test = data.pop('duration_by_test')
+                self.stats_time = data.pop('stats_time')
                 assert not data, data
                 did_load = True
         except (FileNotFoundError, json.JSONDecodeError):
@@ -125,19 +131,25 @@ class StatManager:
     def save_stats(self, stat_file: str = 'mutants/mutmut-stats.json'):
         with open(stat_file, 'w') as f:
             json.dump(dict(
-                tests_by_mangled_function_name={k: list(v) for k, v in self.stats.tests_by_mangled_function_name.items()},
-                duration_by_test=self.stats.duration_by_test,
-                stats_time=self.stats.stats_time,
+                tests_by_mangled_function_name={k: list(v) for k, v in self.tests_by_mangled_function_name.items()},
+                duration_by_test=self.duration_by_test,
+                stats_time=self.stats_time,
             ), f, indent=4)
 
-    @property
-    def tests_by_mangled_function_name(self):
-        return self.stats.tests_by_mangled_function_name
+    def record_trampoline_hit(self, name):
+        assert not name.startswith('src.'), f'Failed trampoline hit. Module name starts with `src.`, which is invalid'
+        if self.config.max_stack_depth != -1:
+            f = inspect.currentframe()
+            c = self.config.max_stack_depth
+            while c and f:
+                if 'pytest' in f.f_code.co_filename or 'hammett' in f.f_code.co_filename:
+                    break
+                f = f.f_back
+                c -= 1
+
+            if not c:
+                return
+
+        self.functions.add(name)
     
-    @property
-    def duration_by_test(self):
-        return self.stats.duration_by_test
-    
-    @property
-    def stats_time(self):
-        return self.stats.stats_time
+MUTATION_STATS = StatManager()

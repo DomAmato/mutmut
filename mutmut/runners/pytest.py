@@ -1,7 +1,7 @@
 from .base import TestRunner
 from ..exceptions import BadTestExecutionCommandsException, CollectTestsFailedException
 from ..utils import strip_prefix
-from ..stats import StatManager
+from ..stats import MUTATION_STATS
 from ..results import ListAllTestsResult
 
 class PytestRunner(TestRunner):
@@ -23,14 +23,13 @@ class PytestRunner(TestRunner):
         class StatsCollector:
             # noinspection PyMethodMayBeStatic
             def pytest_runtest_teardown(self, item, nextitem):
-                # unused(nextitem)
-                for function in self.stats:
-                    self.tests_by_mangled_function_name[function].add(strip_prefix(item._nodeid, prefix='mutants/'))
-                self.stats.clear()
+                for function in MUTATION_STATS.functions:
+                    MUTATION_STATS.tests_by_mangled_function_name[function].add(strip_prefix(item._nodeid, prefix='mutants/'))
+                MUTATION_STATS.functions.clear()
 
             # noinspection PyMethodMayBeStatic
             def pytest_runtest_makereport(self, item, call):
-                self.duration_by_test[item.nodeid] = call.duration
+                MUTATION_STATS.duration_by_test[item.nodeid] = call.duration
 
         stats_collector = StatsCollector()
 
@@ -57,7 +56,7 @@ class PytestRunner(TestRunner):
         with self.change_cwd('mutants'):
             return int(self.execute_pytest(['-x', '-q', '--import-mode=append']))
 
-    def list_all_tests(self, stats: StatManager):
+    def list_all_tests(self):
         class TestsCollector:
             def pytest_collection_modifyitems(self, items):
                 self.nodeids = {item.nodeid for item in items}
@@ -69,5 +68,5 @@ class PytestRunner(TestRunner):
             if exit_code != 0:
                 raise CollectTestsFailedException()
 
-        return ListAllTestsResult(ids=collector.nodeids, stats=stats)
+        return ListAllTestsResult(ids=collector.nodeids)
 

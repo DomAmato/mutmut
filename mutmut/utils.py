@@ -16,8 +16,8 @@ def strip_prefix(s, *, prefix, strict=False):
     assert strict is False, f"String '{s}' does not start with prefix '{prefix}'"
     return s
 
-def walk_all_files(config):
-    for path in config.paths_to_mutate:
+def walk_all_files(paths: list[Path]):
+    for path in paths:
         if not isdir(path):
             if isfile(path):
                 yield '', str(path)
@@ -27,7 +27,7 @@ def walk_all_files(config):
                 yield root, filename
 
 
-def walk_source_files(config):
-    for root, filename in walk_all_files(config):
+def walk_source_files(paths: list[Path]):
+    for root, filename in walk_all_files(paths):
         if filename.endswith('.py'):
             yield Path(root) / filename
