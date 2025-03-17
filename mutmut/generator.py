@@ -4,18 +4,21 @@ import ast
 from contextlib import contextmanager
 from datetime import datetime
 from hashlib import md5
+from io import TextIOWrapper
 import json
 import os
 from pathlib import Path
 import shutil
 from signal import SIGTERM
 from textwrap import dedent, indent
+from typing import Any
 
 from parso import (
     parse,
     ParserSyntaxError
     )
-from mutmut.utils import NEVER_MUTATE_FUNCTION_NAMES, NEVER_MUTATE_FUNCTION_CALLS, CLASS_NAME_SEPARATOR, strip_prefix
+from mutmut.utils import NEVER_MUTATE_FUNCTION_NAMES, NEVER_MUTATE_FUNCTION_CALLS, CLASS_NAME_SEPARATOR, strip_prefix, walk_source_files
+from mutmut.config import Config
 from mutmut.mutators import (
     OperationMutator,
     KeywordMutator,
@@ -110,7 +113,7 @@ class FuncContext:
         return False
 
 class SourceFileMutationData:
-    def __init__(self, *, path):
+    def __init__(self, *, path: Path):
         self.estimated_time_of_tests_by_mutant = {}
         self.path = path
         self.meta_path = Path('mutants') / (str(path) + '.meta')
@@ -157,14 +160,14 @@ class SourceFileMutationData:
             ), f, indent=4)
 
 class MutantGenerator:
-    def __init__(self, config):
+    def __init__(self, config: Config):
         self.mutants = []
         self.source_file_mutation_data = None
         self.sentinel = object()
         self.config = config
 
     def create_mutants(self, ):
-        for path in self.walk_all_files():
+        for path in walk_source_files():
             print(path)
             output_path = Path('mutants') / path
             os.makedirs(output_path.parent, exist_ok=True)
@@ -189,7 +192,7 @@ class MutantGenerator:
                 shutil.copytree(path, destination, dirs_exist_ok=True)
 
 
-    def pragma_no_mutate_lines(self, source):
+    def pragma_no_mutate_lines(self, source: str):
         return {
             i + 1
             for i, line in enumerate(source.split('\n'))
@@ -197,7 +200,7 @@ class MutantGenerator:
         }
 
 
-    def create_mutants_for_file(self, filename, output_path):
+    def create_mutants_for_file(self, filename: Path, output_path: Path):
         input_stat = os.stat(filename)
 
         if output_path.exists() and output_path.stat().st_mtime == input_stat.st_mtime:
@@ -232,14 +235,14 @@ class MutantGenerator:
         os.utime(output_path, (input_stat.st_atime, input_stat.st_mtime))
 
 
-    def ensure_ends_with_newline(self, source):
+    def ensure_ends_with_newline(self, source: str):
         if not source.endswith('\n'):
             return source + '\n'
         else:
             return source
 
 
-    def write_all_mutants_to_file(self, *, out, source, filename):
+    def write_all_mutants_to_file(self, *, out: TextIOWrapper, source: str, filename: Path):
         no_mutate_lines = self, self.pragma_no_mutate_lines(source)
 
         hash_by_function_name = {}
@@ -264,7 +267,7 @@ class MutantGenerator:
         return mutant_names, hash_by_function_name
 
 
-    def build_trampoline(self, *, orig_name, mutants, class_name, is_generator):
+    def build_trampoline(self, *, orig_name: str, mutants: list[str], class_name: str | None, is_generator:bool):
         assert orig_name not in NEVER_MUTATE_FUNCTION_NAMES
 
         mangled_name = self.mangle_function_name(name=orig_name, class_name=class_name)
@@ -306,7 +309,7 @@ class MutantGenerator:
         node.name.value = orig_name
 
 
-    def filter_funcdef_children(self, children):
+    def filter_funcdef_children(self, children: list[Any]):
         # Throw away type annotation for return type
         r = []
         in_annotation = False
@@ -385,14 +388,14 @@ class MutantGenerator:
                     setattr(node, 'children', old_children)
 
 
-    def valid_syntax(self, code):
+    def valid_syntax(self, code: str):
         try:
             ast.parse(dedent(code))
             return True
         except (SyntaxError, IndentationError):
             return False
 
-    def is_generator(self, node):
+    def is_generator(self, node) -> bool:
         assert node.type == 'funcdef'
 
         def _is_generator(n):
