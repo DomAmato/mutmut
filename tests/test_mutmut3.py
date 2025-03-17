@@ -1,9 +1,9 @@
 from parso import parse
 
-from mutmut.__main__ import (
+from mutmut.generator import (
     trampoline_impl,
     yield_from_trampoline_impl,
-    yield_mutants_for_module,
+    MutantGenerator
 )
 
 
@@ -29,22 +29,23 @@ def x_foo__mutmut_2(a, b, c):
     return a + b / c
 
 x_foo__mutmut_mutants : ClassVar[MutantDict] = {
-'x_foo__mutmut_1': x_foo__mutmut_1, 
+    'x_foo__mutmut_1': x_foo__mutmut_1, 
     'x_foo__mutmut_2': x_foo__mutmut_2
 }
 
-def foo(*args, **kwargs):
-    result = _mutmut_trampoline(x_foo__mutmut_orig, x_foo__mutmut_mutants, *args, **kwargs)
-    return result 
+    def foo(*args, **kwargs):
+        result = _mutmut_trampoline(x_foo__mutmut_orig, x_foo__mutmut_mutants, *args, **kwargs)
+        return result 
 
-foo.__signature__ = _mutmut_signature(x_foo__mutmut_orig)
-x_foo__mutmut_orig.__name__ = 'x_foo'
+    foo.__signature__ = _mutmut_signature(x_foo__mutmut_orig)
+    x_foo__mutmut_orig.__name__ = 'x_foo'
 
 
 """
 
     node = parse(source)
-    result = ''.join([x[1] for x in yield_mutants_for_module(node, no_mutate_lines=[])])
+    generator = MutantGenerator({})
+    result = ''.join([x[1] for x in generator.yield_mutants_for_module(node, no_mutate_lines=[])])
 
     assert result == expected
 
@@ -63,21 +64,21 @@ def x_foo__mutmut_orig(a: List[int]) -> int:
 def x_foo__mutmut_1(a: List[int]) -> int:
     return 2
 
-x_foo__mutmut_mutants : ClassVar[MutantDict] = {
+    x_foo__mutmut_mutants : ClassVar[MutantDict] = {
 'x_foo__mutmut_1': x_foo__mutmut_1
 }
 
-def foo(*args, **kwargs):
-    result = _mutmut_trampoline(x_foo__mutmut_orig, x_foo__mutmut_mutants, *args, **kwargs)
-    return result 
+    def foo(*args, **kwargs):
+        result = _mutmut_trampoline(x_foo__mutmut_orig, x_foo__mutmut_mutants, *args, **kwargs)
+        return result 
 
-foo.__signature__ = _mutmut_signature(x_foo__mutmut_orig)
-x_foo__mutmut_orig.__name__ = 'x_foo'
-
+    foo.__signature__ = _mutmut_signature(x_foo__mutmut_orig)
+    x_foo__mutmut_orig.__name__ = 'x_foo'
 
 """
 
     node = parse(source)
-    result = ''.join([x[1] for x in yield_mutants_for_module(node, no_mutate_lines=[])])
+    generator = MutantGenerator({})
+    result = ''.join([x[1] for x in generator.yield_mutants_for_module(node, no_mutate_lines=[])])
 
     assert result == expected

@@ -3,18 +3,12 @@ from io import StringIO
 import pytest
 from parso import parse
 
-from mutmut.__main__ import (
-    CLASS_NAME_SEPARATOR,
+from mutmut.utils import CLASS_NAME_SEPARATOR
+from mutmut.generator import (
     FuncContext,
-    get_diff_for_mutant,
-    is_generator,
-    mangle_function_name,
-    orig_function_and_class_names_from_key,
-    pragma_no_mutate_lines,
-    write_all_mutants_to_file,
-    yield_mutants_for_module,
-    yield_mutants_for_node,
+    MutantGenerator
 )
+from mutmut.__main__ import get_diff_for_mutant, orig_function_and_class_names_from_key
 
 
 @pytest.mark.parametrize(
@@ -124,10 +118,11 @@ from mutmut.__main__ import (
 def test_basic_mutations(original, expected):
     if isinstance(expected, str):
         expected = [expected]
+    mutant_generator = MutantGenerator({})
     func_node = parse(f'def fake():\n    {original}').children[0]
     node = func_node.children[-1]
     assert node.get_code().strip() == original.strip()
-    mutants = list(yield_mutants_for_node(func_node=func_node, context=FuncContext(dict_synonyms={'DictSynonym'}), node=node))
+    mutants = list(mutant_generator.yield_mutants_for_node(func_node=func_node, context=FuncContext(dict_synonyms={'DictSynonym'}), node=node))
     actual = sorted([
         parse(mutant).children[0].children[-1].get_code().strip()
         for (type_, mutant, _, _) in mutants
@@ -143,10 +138,10 @@ def foo() -> int:
     bar: Optional[int]
     return
     """.strip()
-
+    mutant_generator = MutantGenerator({})
     mutants = [
         mutant
-        for type_, mutant, _, _ in yield_mutants_for_module(parse(source), {})
+        for type_, mutant, _, _ in mutant_generator.yield_mutants_for_module(parse(source), {})
         if type_ == 'mutant'
     ]
     for m in mutants:
@@ -162,9 +157,10 @@ class Foo:
         return 1
     """.strip()
 
+    mutant_generator = MutantGenerator({})
     mutants = [
         mutant
-        for type_, mutant, _, _ in yield_mutants_for_module(parse(source), {})
+        for type_, mutant, _, _ in mutant_generator.yield_mutants_for_module(parse(source), {})
         if type_ == 'mutant'
     ]
     for m in mutants:
@@ -175,18 +171,20 @@ class Foo:
 
 
 def mutants_for_source(source):
-    no_mutate_lines = pragma_no_mutate_lines(source)
+    mutant_generator = MutantGenerator({})
+    no_mutate_lines = mutant_generator.pragma_no_mutate_lines(source)
     r = []
-    for type_, x, name_and_hash, mutant_name in yield_mutants_for_module(parse(source, error_recovery=False), no_mutate_lines):
+    for type_, x, name_and_hash, mutant_name in mutant_generator.yield_mutants_for_module(parse(source, error_recovery=False), no_mutate_lines):
         if type_ == 'mutant':
             r.append(x)
     return r
 
 
 def full_mutated_source(source):
-    no_mutate_lines = pragma_no_mutate_lines(source)
+    mutant_generator = MutantGenerator({})
+    no_mutate_lines = mutant_generator.pragma_no_mutate_lines(source)
     r = []
-    for type_, x, name_and_hash, mutant_name in yield_mutants_for_module(parse(source, error_recovery=False), no_mutate_lines):
+    for type_, x, name_and_hash, mutant_name in mutant_generator.yield_mutants_for_module(parse(source, error_recovery=False), no_mutate_lines):
         r.append(x)
     return '\n'.join(r).strip()
 
@@ -305,8 +303,9 @@ def test_orig_function_name_from_key():
 
 
 def test_mangle_function_name():
-    assert mangle_function_name(name='bar', class_name=None) == 'x_bar'
-    assert mangle_function_name(name='bar', class_name='Foo') == f'x{CLASS_NAME_SEPARATOR}Foo{CLASS_NAME_SEPARATOR}bar'
+    mutant_generator = MutantGenerator({})
+    assert mutant_generator.mangle_function_name(name='bar', class_name=None) == 'x_bar'
+    assert mutant_generator.mangle_function_name(name='bar', class_name='Foo') == f'x{CLASS_NAME_SEPARATOR}Foo{CLASS_NAME_SEPARATOR}bar'
 
 
 def test_diff_ops():
@@ -320,9 +319,10 @@ class Foo:
         return 3
 
     """.strip()
+    mutant_generator = MutantGenerator({})
 
     out = StringIO()
-    mutant_names, hash_by_function_name = write_all_mutants_to_file(out=out, source=source, filename='filename')
+    mutant_names, hash_by_function_name = mutant_generator.write_all_mutants_to_file(out=out, source=source, filename='filename')
     assert len(mutant_names) == 2
     mutants_source = out.getvalue()
 
@@ -375,19 +375,22 @@ def test_is_generator():
     def foo():
         yield 1
     '''.strip()
-    assert is_generator(parse(source).children[0])
+    mutant_generator = MutantGenerator({})
+    assert mutant_generator.is_generator(parse(source).children[0])
 
     source = '''
     def foo():
         yield from bar()
     '''.strip()
-    assert is_generator(parse(source).children[0])
+    mutant_generator = MutantGenerator({})
+    assert mutant_generator.is_generator(parse(source).children[0])
 
     source = '''
     def foo():
         return 1
     '''.strip()
-    assert not is_generator(parse(source).children[0])
+    mutant_generator = MutantGenerator({})
+    assert not mutant_generator.is_generator(parse(source).children[0])
 
     source = '''
     def foo():
@@ -395,7 +398,8 @@ def test_is_generator():
             yield 2
         return 1
     '''.strip()
-    assert not is_generator(parse(source).children[0])
+    mutant_generator = MutantGenerator({})
+    assert not mutant_generator.is_generator(parse(source).children[0])
 
 
 # def test_decorated_functions_mutation():
