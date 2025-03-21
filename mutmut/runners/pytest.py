@@ -1,3 +1,4 @@
+import os
 from .base import TestRunner
 from ..exceptions import BadTestExecutionCommandsException, CollectTestsFailedException
 from ..utils import strip_prefix
@@ -33,7 +34,7 @@ class PytestRunner(TestRunner):
 
         stats_collector = StatsCollector()
 
-        with self.change_cwd('mutants'):
+        with self.change_cwd(self.config.mutation_path):
             return int(self.execute_pytest(['-x', '-q', '--import-mode=append'] + list(tests), plugins=[stats_collector]))
 
             """
@@ -49,11 +50,16 @@ class PytestRunner(TestRunner):
             whereas by default they would always pick up the local version.
             """
     def run_tests(self, *, mutant_name, tests):
-        with self.change_cwd('mutants'):
+        with self.change_cwd(self.config.mutation_path):
             return int(self.execute_pytest(['-x', '-q', '--import-mode=append'] + list(tests)))
-
+        
+    def run_clean_tests(self):
+        with self.change_cwd(self.config.mutation_path):
+            params = ['-x', '-q', '--import-mode=append']
+            return int(self.execute_pytest(params))
+        
     def run_forced_fail(self):
-        with self.change_cwd('mutants'):
+        with self.change_cwd(self.config.mutation_path):
             return int(self.execute_pytest(['-x', '-q', '--import-mode=append']))
 
     def list_all_tests(self):
@@ -63,10 +69,9 @@ class PytestRunner(TestRunner):
 
         collector = TestsCollector()
 
-        with self.change_cwd('mutants'):
+        with self.change_cwd(self.config.mutation_path):
             exit_code = int(self.execute_pytest(['-x', '-q', '--collect-only'], plugins=[collector]))
             if exit_code != 0:
                 raise CollectTestsFailedException()
 
         return ListAllTestsResult(ids=collector.nodeids)
-

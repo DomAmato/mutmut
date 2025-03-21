@@ -28,13 +28,12 @@ from mutmut.mutators import (
     ArgumentMutator,
     ArgListMutator,
     LogicMutator,
-    LogicMutator,
     LambdaMutator,
     ExpressionMutator,
     DecoratorMutator,
-    ExpressionMutator,
     TrailerMutator
 )
+
 
 MUTATION_BY_AST_TYPE = {
     'operator': OperationMutator,
@@ -113,10 +112,10 @@ class FuncContext:
         return False
 
 class SourceFileMutationData:
-    def __init__(self, *, path: Path):
+    def __init__(self, path: Path, mutation_path: Path):
         self.estimated_time_of_tests_by_mutant = {}
         self.path = path
-        self.meta_path = Path('mutants') / (str(path) + '.meta')
+        self.meta_path = mutation_path / (str(path) + '.meta')
         self.meta = None
         self.key_by_pid = {}
         self.exit_code_by_key = {}
@@ -169,14 +168,21 @@ class MutantGenerator:
     def copy_src_dir(self):
         for root, filename in walk_all_files(self.config.paths_to_mutate):
             path = Path(root) / filename
-            output_path = Path('mutants') / path
+            output_path = self.config.mutation_path / path
+            os.makedirs(output_path.parent, exist_ok=True)
+            shutil.copy(path, output_path)
+
+    def copy_tests_dir(self):
+        for root, filename in walk_all_files(self.config.test_dirs):
+            path = Path(root) / filename
+            output_path = self.config.mutation_path / path
             os.makedirs(output_path.parent, exist_ok=True)
             shutil.copy(path, output_path)
 
     def create_mutants(self):
         for path in walk_source_files(self.config.paths_to_mutate):
             print(path)
-            output_path = Path('mutants') / path
+            output_path = self.config.mutation_path / path
             os.makedirs(output_path.parent, exist_ok=True)
 
             if self.config.should_ignore_for_mutation(path):
@@ -190,7 +196,7 @@ class MutantGenerator:
         for path in self.config.also_copy:
             print('     also copying', path)
             path = Path(path)
-            destination = Path('mutants') / path
+            destination = self.config.mutation_path / path
             if not path.exists():
                 continue
             if path.is_file():
@@ -228,7 +234,7 @@ class MutantGenerator:
                 print(output_path, 'has invalid syntax: ', e)
                 exit(1)
 
-        source_file_mutation_data = SourceFileMutationData(path=filename)
+        source_file_mutation_data = SourceFileMutationData(path=filename, mutation_path=self.config.mutation_path)
         module_name = strip_prefix(str(filename)[:-len(filename.suffix)].replace(os.sep, '.'), prefix='src.')
 
         source_file_mutation_data.exit_code_by_key = {

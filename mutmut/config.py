@@ -3,6 +3,7 @@ from configparser import (
     NoOptionError,
     NoSectionError,
 )
+from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 import fnmatch
@@ -14,11 +15,45 @@ from os.path import (
 )
 from os import getcwd, sep
 
+from mutmut.mutators.base import BaseMutator
+from mutmut.mutators import (
+    OperationMutator,
+    KeywordMutator,
+    NumberMutator,
+    NameMutator,
+    StringMutator,
+    ArgumentMutator,
+    ArgListMutator,
+    LogicMutator,
+    LambdaMutator,
+    ExpressionMutator,
+    DecoratorMutator,
+    TrailerMutator
+)
+class MutationTypes(Enum):
+    OPERATION = OperationMutator,
+    KEYWORD = KeywordMutator,
+    NUMBER = NumberMutator,
+    NAME = NameMutator,
+    STRING = StringMutator,
+    ARGUMENT = ArgumentMutator,
+    ARGLIST = ArgListMutator,
+    LOGIC = LogicMutator,
+    LAMBDA = LambdaMutator,
+    EXPRESSION = ExpressionMutator,
+    DECORATOR = DecoratorMutator,
+    TRAILER = TrailerMutator
+
 @dataclass
 class Config:
     also_copy: list[Path]
     do_not_mutate: list[str]
     max_stack_depth: int
+    test_dirs: list[Path]
+    mutation_path: Path
+    mutation_types: list[BaseMutator]
+    test_params: list[str]
+
     debug: bool
     paths_to_mutate: list[Path]
 
@@ -73,18 +108,18 @@ def config_reader():
         except KeyError:
             pass
         else:
-            def s(key, default):
+            def get_config_value(key, default):
                 try:
                     result = config[key]
                 except KeyError:
                     return default
                 return result
-            return s
+            return get_config_value
 
     config_parser = ConfigParser()
     config_parser.read('setup.cfg')
 
-    def s(key, default):
+    def get_config_value(key, default):
         try:
             result = config_parser.get('mutmut', key)
         except (NoOptionError, NoSectionError):
@@ -99,28 +134,34 @@ def config_reader():
         elif isinstance(default, int):
             result = int(result)
         return result
-    return s
+    return get_config_value
 
 
 @lru_cache()
 def read_config():
-    s = config_reader()
+    load_config_parameter = config_reader()
 
     return Config(
-        do_not_mutate=s('do_not_mutate', []),
+        do_not_mutate=load_config_parameter('do_not_mutate', []),
         also_copy=[
             Path(y)
-            for y in s('also_copy', [])
+            for y in load_config_parameter('also_copy', [])
         ] + [
-            Path('tests/'),
-            Path('test/'),
             Path('setup.cfg'),
             Path('pyproject.toml'),
         ] + list(Path('.').glob('test*.py')),
-        max_stack_depth=s('max_stack_depth', -1),
-        debug=s('debug', False),
+        mutation_path=Path(load_config_parameter('mutation_path', 'mutants')),
+        test_dirs=[
+            Path(y)
+            for y in load_config_parameter('test_dir', ['tests', 'test'])
+        ],
+        max_stack_depth=load_config_parameter('max_stack_depth', -1),
+        mutation_types=[ MutationTypes[mutant] for mutant in
+            load_config_parameter('mutation_types', list(MutationTypes.__members__))],
+        debug=load_config_parameter('debug', False),
+        test_params= [param for param in load_config_parameter('test_params', ['-x', '-q', '--import-mode=append'])],
         paths_to_mutate=[
             Path(y)
-            for y in s('paths_to_mutate', [])
+            for y in load_config_parameter('paths_to_mutate', [])
         ] or guess_paths_to_mutate()
     )

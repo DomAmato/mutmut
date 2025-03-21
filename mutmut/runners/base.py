@@ -14,6 +14,10 @@ class TestRunner(ABC):
         pass
 
     @abstractmethod
+    def run_clean_tests(self):
+        pass
+
+    @abstractmethod
     def run_forced_fail(self):
         pass
 

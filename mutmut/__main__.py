@@ -54,7 +54,7 @@ def status_printer():
     last_update = [datetime(1900, 1, 1)]
     update_threshold = timedelta(seconds=0.1)
 
-    def p(s, *, force_output=False):
+    def print_status_line(s, *, force_output=False):
         if not force_output and (datetime.now() - last_update[0]) < update_threshold:
             return
         s = next(spinner) + ' ' + s
@@ -63,7 +63,7 @@ def status_printer():
         sys.__stdout__.write(output)
         sys.__stdout__.flush()
         last_len[0] = len_s
-    return p
+    return print_status_line
 
 
 print_status = status_printer()
@@ -96,7 +96,7 @@ def tests_for_mutant_names(mutant_names):
 
 
 def read_mutants_ast(path):
-    with open(Path('mutants') / path) as f:
+    with open(mutmut_config.mutation_path / path) as f:
         return parse(f.read(), error_recovery=False)
 
 
@@ -138,12 +138,12 @@ def read_mutant_ast_node(ast, mutant_name):
     return result
 
 
-def find_mutant(mutant_name):
+def find_mutant(mutant_name) -> SourceFileMutationData:
     for path in walk_source_files(mutmut_config):
         if mutmut_config.should_ignore_for_mutation(path):
             continue
 
-        m = SourceFileMutationData(path=path)
+        m = SourceFileMutationData(path=path, mutation_path=mutmut_config.mutation_path)
         m.load()
         if mutant_name in m.exit_code_by_key:
             return m
@@ -227,6 +227,7 @@ def collect_or_load_stats(runner):
 
     if not did_load:
         # Run full stats
+        print('No stats found, running full stats collection')
         run_stats_collection(runner)
     else:
         # Run incremental stats
@@ -247,9 +248,6 @@ def collect_or_load_stats(runner):
             print(f'Found {len(new_tests)} new tests, rerunning stats collection')
             run_stats_collection(runner, tests=new_tests)
 
-
-
-
 def collect_source_file_mutation_data(*, mutant_names):
     source_file_mutation_data_by_path: dict[str, SourceFileMutationData] = {}
 
@@ -257,24 +255,25 @@ def collect_source_file_mutation_data(*, mutant_names):
         if mutmut_config.should_ignore_for_mutation(path):
             continue
         assert path not in source_file_mutation_data_by_path
-        m = SourceFileMutationData(path=path)
+        m = SourceFileMutationData(path=path, mutation_path=mutmut_config.mutation_path)
         m.load()
         source_file_mutation_data_by_path[str(path)] = m
 
     mutants = [
-        (m, mutant_name, result)
+        (m, mutant_name, exit_code)
         for path, m in source_file_mutation_data_by_path.items()
-        for mutant_name, result in m.exit_code_by_key.items()
+        for mutant_name, exit_code in m.exit_code_by_key.items()
     ]
 
     if mutant_names:
         filtered_mutants = [
-            (m, key, result)
-            for m, key, result in mutants
+            (m, key, exit_code)
+            for m, key, exit_code in mutants
             if key in mutant_names or any(fnmatch.fnmatch(key, mutant_name) for mutant_name in mutant_names)
         ]
         assert filtered_mutants, f'Filtered for specific mutants, but nothing matches\n\nFilter: {mutant_names}'
         mutants = filtered_mutants
+
     return mutants, source_file_mutation_data_by_path
 
 def collected_test_names():
@@ -297,6 +296,7 @@ def orig_function_and_class_names_from_key(mutant_name):
         assert r.startswith('x_'), r
         r = r[2:]
     return r, class_name
+
 class CatchOutput:
     def __init__(self, callback=lambda s: None, spinner_title=None):
         self.strings = []
@@ -395,48 +395,46 @@ def run(mutant_names, *, max_children):
 
     # TODO: run no-ops once in a while to detect if we get false negatives
     # TODO: we should be able to get information on which tests killed mutants, which means we can get a list of tests and how many mutants each test kills. Those that kill zero mutants are redundant!
-    os.environ['MUTANT_UNDER_TEST'] = 'mutant_generation'
 
     start = datetime.now()
-    makedirs(Path('mutants'), exist_ok=True)
+    makedirs(mutmut_config.mutation_path, exist_ok=True)
     with CatchOutput(spinner_title='Generating mutants'):
         mutant_generatior.copy_src_dir()
         mutant_generatior.create_mutants()
+        mutant_generatior.copy_tests_dir()
         mutant_generatior.copy_also_copy_files()
 
     time = datetime.now() - start
     print(f'    done in {round(time.total_seconds()*1000)}ms', )
+    
 
-    src_path = (Path('mutants') / 'src')
-    source_path = (Path('mutants') / 'source')
+    src_path = (mutmut_config.mutation_path / 'src')
+    source_path = (mutmut_config.mutation_path / 'source')
     if src_path.exists():
         sys.path.insert(0, str(src_path.absolute()))
     elif source_path.exists():
         sys.path.insert(0, str(source_path.absolute))
     else:
-        sys.path.insert(0, os.path.abspath('mutants'))
+        sys.path.insert(0, mutmut_config.mutation_path.absolute().as_posix())
 
     # TODO: config/option for runner
     # runner = HammettRunner()
     runner = PytestRunner(config=mutmut_config)
     runner.prepare_main_test_run()
-
-    # TODO: run these steps only if we have mutants to test
-
+    
+    os.environ['MUTANT_UNDER_TEST'] = 'mutant_generation'
     collect_or_load_stats(runner)
-
-    mutants, source_file_mutation_data_by_path = collect_source_file_mutation_data(mutant_names=mutant_names)
 
     os.environ['MUTANT_UNDER_TEST'] = ''
     with CatchOutput(spinner_title='Running clean tests') as output_catcher:
-        tests = tests_for_mutant_names(mutant_names)
-
-        clean_test_exit_code = runner.run_tests(mutant_name=None, tests=tests)
+        clean_test_exit_code = runner.run_clean_tests()
         if clean_test_exit_code != 0:
             output_catcher.dump_output()
             print('Failed to run clean test')
             exit(1)
     print('    done')
+
+    mutants, source_file_mutation_data_by_path = collect_source_file_mutation_data(mutant_names=mutant_names)
 
     # this can't be the first thing, because it can fail deep inside pytest/django setup and then everything is destroyed
     run_forced_fail(runner)
@@ -509,6 +507,7 @@ def run(mutant_names, *, max_children):
                 resource.setrlimit(resource.RLIMIT_CPU, (cpu_time_limit, cpu_time_limit))
 
                 with CatchOutput():
+                    print(f'Running {mutant_name} with tests {tests}')
                     result = runner.run_tests(mutant_name=mutant_name, tests=tests)
 
                 if result != 0:
@@ -541,7 +540,8 @@ def run(mutant_names, *, max_children):
 
     MUTATION_STATS.print_stats(source_file_mutation_data_by_path, print_status=print_status, force_output=True)
     print()
-    print(f'{count_tried / t.total_seconds():.2f} mutations/second')
+    print(f'    done in {round(time.total_seconds()*1000)}ms', )
+    print(f'    {count_tried / t.total_seconds():.2f} mutations/second')
 
     if mutant_names:
         print()
@@ -564,7 +564,7 @@ def results(all):
     for path in walk_source_files(mutmut_config.paths_to_mutate):
         if not str(path).endswith('.py'):
             continue
-        m = SourceFileMutationData(path=path)
+        m = SourceFileMutationData(path=path, mutation_path=mutmut_config.mutation_path)
         m.load()
         for k, v in m.exit_code_by_key.items():
             status = STATUS_BY_EXIT_CODE[v]
